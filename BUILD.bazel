@@ -112,7 +112,7 @@ configure_make(
         "no-async",  # Disable async dispatch (unused)
         "-DUSE_TIMEGM",  # QNX doesn't provide the 'timezone' global variable
 
-        "shared",  # Builds both static (.a) and shared (.so) libraries
+        "no-shared",  # Only build static archives (.a)
         "--prefix=$${INSTALLDIR}",
         "--openssldir=$${INSTALLDIR}",
         "--libdir=lib",
@@ -138,12 +138,7 @@ configure_make(
         "libcrypto.a",
         "libssl.a",
     ],
-    out_shared_libs = [
-        "libcrypto.so",
-        "libcrypto.so.3",
-        "libssl.so",
-        "libssl.so.3",
-    ],
+
     tags = ["no-sandbox"],
     targets = [
         "build_libs",
@@ -186,7 +181,7 @@ cc_library(
 # Opt-in shared library
 cc_shared_library(
     name = "openssl_shared",
-    shared_lib_name = "libopenssl.so.3",
+    shared_lib_name = "libopenssl.so",
     visibility = ["//visibility:public"],
     deps = [
         ":openssl",
