@@ -19,3 +19,18 @@ build:x86_64-linux --extra_toolchains=@score_gcc_x86_64_toolchain//:x86_64-linux
 build:aarch64-linux --config=shared
 build:aarch64-linux --platforms=@score_bazel_platforms//:aarch64-linux-gcc_12.2.0-posix
 build:aarch64-linux --extra_toolchains=@score_gcc_aarch64_toolchain//:aarch64-linux-gcc_12.2.0
+
+# -------------------------------------------------------------------------------
+# Config dedicated to target platform CPU:x86_64 and OS:QNX
+# -------------------------------------------------------------------------------
+build:x86_64-qnx --platforms=@score_bazel_platforms//:x86_64-qnx-sdp_8.0.0-posix
+build:x86_64-qnx --extra_toolchains=@score_qcc_x86_64_toolchain//:x86_64-qnx-sdp_8.0.0
+
+# -------------------------------------------------------------------------------
+# Config dedicated to target platform CPU:aarch64 and OS:QNX
+# -------------------------------------------------------------------------------
+build:aarch64-qnx --platforms=@score_bazel_platforms//:aarch64-qnx-sdp_8.0.0-posix
+build:aarch64-qnx --extra_toolchains=@score_qcc_aarch64_toolchain//:aarch64-qnx-sdp_8.0.0
+
+# Import optional user-specific configurations after repository defaults.
+try-import %workspace%/.bazelrc.user
