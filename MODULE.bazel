@@ -11,7 +11,6 @@ bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(
     name = "score_bazel_platforms",
     version = "1.1.0",
-    dev_dependency = True,
 )
 
 # Central C++ toolchains required for cross-compiling to QNX8 target environments
@@ -55,10 +54,28 @@ gcc.toolchain(
     use_default_package = True,
     version = "12.2.0",
 )
+gcc.toolchain(
+    name = "score_qcc_x86_64_toolchain",
+    sdp_version = "8.0.4",
+    target_cpu = "x86_64",
+    target_os = "qnx",
+    use_default_package = True,
+    version = "12.2.0",
+)
+gcc.toolchain(
+    name = "score_qcc_aarch64_toolchain",
+    sdp_version = "8.0.4",
+    target_cpu = "aarch64",
+    target_os = "qnx",
+    use_default_package = True,
+    version = "12.2.0",
+)
 use_repo(
     gcc,
     "score_gcc_aarch64_toolchain",
     "score_gcc_x86_64_toolchain",
+    "score_qcc_aarch64_toolchain",
+    "score_qcc_x86_64_toolchain",
 )
 
 bazel_dep(
