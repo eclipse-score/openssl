@@ -63,5 +63,5 @@ use_repo(
 
 bazel_dep(
     name = "score_devcontainer",
-    version = "1.11.2",
+    version = "1.11.3",
 )
