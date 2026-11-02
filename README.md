@@ -44,23 +44,32 @@ Extracting OpenSSL compilation into a standalone leaf-node module (`@score_opens
  │               (Main Cryptographic Provider Library)                     │
  └─────────────┬─────────────────────────────────────────┬─────────────────┘
                │                                         │
-               ▼ (Depends on Rust crates)                 ▼ (Depends on C++ FFI)
+               ▼ (Depends on Rust crates)                ▼ (Depends on C++ FFI)
  ┌───────────────────────────┐             ┌───────────────────────────┐
  │ @score_crates             │             │ @score_openssl            │
  │ (Central Rust Registry)   │             │ (C++ Build Rules/Patches) │
  │                           │             │                           │
  │ * Central Rust crates     │             │ * Zero external deps!     │
  │ * Pre-patched openssl-sys │             │ * Owns build rules/patch  │
- └─────────────┬─────────────┘             └───────────────────────────┘
+ └─────────────┬─────────────┘             │ * label_flag openssl_impl │
+               │                           └─────────────┬─────────────┘
+               │                                         ┆ (optional swap via --@score_openssl//:openssl_impl)
+               │                                         ▼
+               │                           ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+               │                           │ Project-specific OpenSSL  │
+               │                           │ (e.g. @openssl//:ssl)     │
+               │                           └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
                │                                         │
                └─────────────────────────────────────────┘
-          (@score_crates links down to @score_openssl//:openssl_link)
+          (@score_crates links down to @score_openssl//:openssl_link,
+           which resolves via the openssl_impl label_flag)
 ```
 
 ### Key Architectural Benefits:
 *   **Unidirectional Graph**: `@score_openssl` acts as a clean leaf module. Both `score_crypto` and `@score_crates` consume it without creating circular release loops.
 *   **Independent Release Lifecycle**: `@score_openssl` can be tagged, versioned, and updated independently of Rust crates or higher-level crypto daemons.
 *   **Workspace Cleanliness**: `score_crypto` remains free of C++ OpenSSL target build rules, genrules, and platform patch files.
+*   **Project-Specific OpenSSL**: The OpenSSL library can be swapped for a project-specific version via the `label_flag` `@score_openssl//:openssl_impl` (see [Section 4](#4-linking-architecture-dr-002-compliance)), without modifying downstream modules.
 
 ---
 
@@ -103,3 +112,7 @@ bazel build --//:use_dynamic_openssl=True //...
 # Override example (e.g. in root .bazelrc):
 build --@score_openssl//:openssl_impl=@openssl//:ssl
 ```
+
+## 5. Testing
+
+This repository only builds OpenSSL and contains no tests of the resulting libraries. All testing is done in the downstream `score_crypto` repository, which consumes `:openssl` directly and `:openssl_link` via `@score_crates`. `:openssl_shared` is only used when `use_dynamic_openssl` is enabled.

@@ -16,30 +16,15 @@ load("@rules_cc//cc:defs.bzl", "cc_import", "cc_library", "cc_shared_library")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
 load("//:openssl_build_info.bzl", "openssl_build_info")
 
-# config settings for selecting on OS + CPU combinations
-config_setting(
-    name = "is_qnx_aarch64",
-    constraint_values = [
-        "@platforms//os:qnx",
-        "@platforms//cpu:aarch64",
-    ],
-)
-
-config_setting(
-    name = "is_qnx_x86_64",
-    constraint_values = [
-        "@platforms//os:qnx",
-        "@platforms//cpu:x86_64",
-    ],
-)
-
-config_setting(
-    name = "is_linux_aarch64",
-    constraint_values = [
-        "@platforms//os:linux",
-        "@platforms//cpu:aarch64",
-    ],
-)
+# Normalise a toolchain-exported SDP path to an absolute path under the execroot.
+# Handles "/proc/self/cwd/<rel>" (current score_bazel_cpp_toolchains), plain "<rel>"
+# (execroot relative) and absolute paths (left untouched).
+_QNX_SDP_ENV_FIXUP = select({
+    "@platforms//os:qnx": "env" +
+                          " QNX_HOST=\"$$(cd $$EXT_BUILD_ROOT && realpath -ms -- \"$${QNX_HOST#/proc/self/cwd/}\")\"" +
+                          " QNX_TARGET=\"$$(cd $$EXT_BUILD_ROOT && realpath -ms -- \"$${QNX_TARGET#/proc/self/cwd/}\")\"",
+    "//conditions:default": "",
+})
 
 # OpenSSL build using rules_foreign_cc
 # Configure options reference for OpenSSL 3.6.1:
@@ -52,9 +37,9 @@ configure_make(
     configure_command = "Configure",  # OpenSSL uses Configure, not configure
     configure_in_place = False,  # Avoid path conflicts with QCC
     configure_options = select({
-        ":is_qnx_aarch64": ["qnx-aarch64"],  # Patched openssl main.conf
-        ":is_qnx_x86_64": ["qnx-x86_64"],    # Patched openssl main.conf
-        ":is_linux_aarch64": ["linux-aarch64"],
+        "@score_bazel_platforms//settings:aarch64-qnx": ["qnx-aarch64"],  # Patched openssl main.conf
+        "@score_bazel_platforms//settings:x86_64-qnx": ["qnx-x86_64"],    # Patched openssl main.conf
+        "@score_bazel_platforms//settings:aarch64-linux": ["linux-aarch64"],
         "//conditions:default": [],
     }) + [
         "no-asm",  # Disable assembly optimizations to avoid GCC inline assembly issues
@@ -120,17 +105,11 @@ configure_make(
         # Note: DES is intentionally kept enabled for SoftHSM compatibility (3DES / CKM_DES3_CBC)
         # Note: MD5 is intentionally kept enabled for SoftHSM and TLS PRF compatibility
     ],
-    env = select({
-        ":is_qnx_aarch64": {
-            "QNX_HOST": "$${PWD}/external/score_bazel_cpp_toolchains++gcc+score_qcc_aarch64_toolchain_pkg/host/linux/x86_64",
-            "QNX_TARGET": "$${PWD}/external/score_bazel_cpp_toolchains++gcc+score_qcc_aarch64_toolchain_pkg/target/qnx",
-        },
-        ":is_qnx_x86_64": {
-            "QNX_HOST": "$${PWD}/external/score_bazel_cpp_toolchains++gcc+score_qcc_x86_64_toolchain_pkg/host/linux/x86_64",
-            "QNX_TARGET": "$${PWD}/external/score_bazel_cpp_toolchains++gcc+score_qcc_x86_64_toolchain_pkg/target/qnx",
-        },
-        "//conditions:default": {},
-    }),
+    # The toolchain exports QNX_HOST/QNX_TARGET as /proc/self/cwd/external/...; that only
+    # resolves while the cwd is the execroot, but foreign_cc make runs from the build tmpdir.
+    # Re-root them onto EXT_BUILD_ROOT for configure and make.
+    configure_prefix = _QNX_SDP_ENV_FIXUP,
+    tool_prefix = _QNX_SDP_ENV_FIXUP,
     lib_source = "@openssl_source//:all",
     out_include_dir = "include",
     out_lib_dir = "lib",
