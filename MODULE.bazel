@@ -12,7 +12,11 @@ bazel_dep(
     name = "score_bazel_platforms",
     version = "1.1.0",
 )
-
+git_override(
+    module_name = "score_bazel_platforms",
+    commit = "081dcf7bdbc94d05bbe354291e13a775dbf8f3e6",
+    remote = "https://github.com/eclipse-score/bazel_platforms.git",
+)
 # Central C++ toolchains required for cross-compiling to QNX8 target environments
 bazel_dep(
     name = "score_bazel_cpp_toolchains",
@@ -81,4 +85,5 @@ use_repo(
 bazel_dep(
     name = "score_devcontainer",
     version = "1.11.4",
+    dev_dependency = True,
 )
