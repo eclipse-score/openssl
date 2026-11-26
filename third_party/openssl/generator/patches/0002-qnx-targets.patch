@@ -1,0 +1,375 @@
+diff --git a/generator/common.py b/generator/common.py
+index e52d9a7..20fcdf8 100644
+--- a/generator/common.py
++++ b/generator/common.py
+@@ -38,6 +38,8 @@ ANDROID_X86 = "android-x86_64"
+ IOS_ARM64 = "ios64-cross"
+ FREEBSD_X86 = "BSD-x86_64"
+ FREEBSD_ARM64 = "BSD-aarch64"
++QNX_X86 = "qnx-x86_64"
++QNX_ARM64 = "qnx-aarch64"
+ 
+ LINUX_PLATFORMS = [LINUX_ARM64, LINUX_X86, LINUX_RISCV64, LINUX_PPC64LE, LINUX_S390X, LINUX_ARM]
+ MAC_PLATFORMS = [MAC_ARM64, MAC_X86]
+@@ -46,7 +48,10 @@ WINDOWS_PLATFORMS = [WINDOWS_ARM64, WINDOWS_X86]
+ ANDROID_PLATFORMS = [ANDROID_ARM64, ANDROID_X86]
+ IOS_PLATFORMS = [IOS_ARM64]
+ FREEBSD_PLATFORMS = [FREEBSD_ARM64, FREEBSD_X86]
+-ALL_PLATFORMS = UNIX_PLATFORMS + WINDOWS_PLATFORMS + ANDROID_PLATFORMS + IOS_PLATFORMS + FREEBSD_PLATFORMS
++QNX_PLATFORMS = [QNX_ARM64, QNX_X86]
++ALL_PLATFORMS = (
++    UNIX_PLATFORMS + WINDOWS_PLATFORMS + ANDROID_PLATFORMS + IOS_PLATFORMS + FREEBSD_PLATFORMS + QNX_PLATFORMS
++)
+ 
+ NO_ASM_TARGET = "no-asm"
+ 
+@@ -69,6 +74,8 @@ PLATFORM_CONSTRAINTS: dict[str, tuple[str, str]] = {
+     "ios_arm64": ("@platforms//os:ios", "@platforms//cpu:arm64"),
+     "freebsd_x86_64": ("@platforms//os:freebsd", "@platforms//cpu:x86_64"),
+     "freebsd_aarch64": ("@platforms//os:freebsd", "@platforms//cpu:aarch64"),
++    "qnx_x86_64": ("@platforms//os:qnx", "@platforms//cpu:x86_64"),
++    "qnx_aarch64": ("@platforms//os:qnx", "@platforms//cpu:aarch64"),
+ }
+ 
+ _CONFIG_NAME_MAP = {
+@@ -87,6 +94,8 @@ _CONFIG_NAME_MAP = {
+     IOS_ARM64: "ios_arm64",
+     FREEBSD_X86: "freebsd_x86_64",
+     FREEBSD_ARM64: "freebsd_aarch64",
++    QNX_X86: "qnx_x86_64",
++    QNX_ARM64: "qnx_aarch64",
+     NO_ASM_TARGET: "no_asm",
+ }
+ 
+diff --git a/generator/generate_constants.py b/generator/generate_constants.py
+index 669936e..e3e1f44 100644
+--- a/generator/generate_constants.py
++++ b/generator/generate_constants.py
+@@ -301,11 +301,35 @@ def _bazel_config_name(platform: str) -> str:
+     return f"{get_configure_target(platform)}-bazel"
+ 
+ 
++# Targets upstream's Configurations/ does not know; config.conf body per target.
++_QNX_TARGET_BODY = """\
++        inherit_from   => [ "BASE_unix" ],
++        cppflags       => add("-D_QNX_SOURCE"),
++        ex_libs        => "",
++        bn_ops         => "SIXTY_FOUR_BIT_LONG RC4_CHAR",
++        asm_arch       => '{asm_arch}',
++        perlasm_scheme => '{perlasm_scheme}',
++        thread_scheme  => "pthreads",
++        dso_scheme     => undef,
++        shared_target  => "linux-shared",
++        shared_cflag   => "-fPIC",
++        shared_ldflag  => "-shared",
++"""
++_CUSTOM_TARGETS = {
++    "qnx-x86_64": _QNX_TARGET_BODY.format(asm_arch="x86_64", perlasm_scheme="elf"),
++    "qnx-aarch64": _QNX_TARGET_BODY.format(asm_arch="aarch64", perlasm_scheme="linux64"),
++}
++
++
+ def write_config_file(openssl_dir: Path, platform: str) -> None:
+     target = get_configure_target(platform)
+     name = _bazel_config_name(platform)
+     override = _ANDROID_CONFIG_OVERRIDES.get(target)
+-    if override:
++    custom = _CUSTOM_TARGETS.get(target)
++    if custom:
++        with (openssl_dir / "config.conf").open("w") as f:
++            f.write(f"(\n    '{name}' => {{\n{custom}    }}\n);\n")
++    elif override:
+         with (openssl_dir / "config.conf").open("w") as f:
+             f.write(
+                 f"""(
+@@ -736,7 +760,7 @@ HERMETIC_ENV = {json.dumps(_HERMETIC_ENV, indent=indent)}
+ _PERLASM_FLAVORS: dict[str, dict[str, Any]] = {
+     "elf": {
+         "source_platform": "linux-x86_64-clang",
+-        "consumers": ["linux_x86_64", "android_x86_64", "freebsd_x86_64"],
++        "consumers": ["linux_x86_64", "android_x86_64", "freebsd_x86_64", "qnx_x86_64"],
+         "probe_profile": "gnu",
+     },
+     "macosx": {
+@@ -751,7 +775,7 @@ _PERLASM_FLAVORS: dict[str, dict[str, Any]] = {
+     },
+     "linux64": {
+         "source_platform": "darwin64-arm64-cc",
+-        "consumers": ["linux_aarch64", "android_arm64", "freebsd_aarch64"],
++        "consumers": ["linux_aarch64", "android_arm64", "freebsd_aarch64", "qnx_aarch64"],
+         "probe_profile": "gnu",
+     },
+     "linux32": {
+diff --git a/overlay/BUILD.bazel b/overlay/BUILD.bazel
+index d992899..7083e78 100644
+--- a/overlay/BUILD.bazel
++++ b/overlay/BUILD.bazel
+@@ -108,6 +108,17 @@ load(
+     _LINUX_AARCH64_OPENSSL_DEFINES = "OPENSSL_DEFINES",
+     _LINUX_AARCH64_PERLASM_ENTRIES = "PERLASM",
+ )
++load(
++    "//bazel/constants:qnx_aarch64.bzl",
++    _QNX_AARCH64_ASM_APP_EXTRA = "ASM_APP_EXTRA_SRCS",
++    _QNX_AARCH64_ASM_CRYPTO_EXTRA = "ASM_CRYPTO_EXTRA_SRCS",
++    _QNX_AARCH64_ASM_SSL_EXTRA = "ASM_SSL_EXTRA_SRCS",
++    _QNX_AARCH64_LIBCRYPTO_DEFINES = "LIBCRYPTO_DEFINES",
++    _QNX_AARCH64_LIBSSL_DEFINES = "LIBSSL_DEFINES",
++    _QNX_AARCH64_OPENSSL_APP_DEFINES = "OPENSSL_APP_DEFINES",
++    _QNX_AARCH64_OPENSSL_DEFINES = "OPENSSL_DEFINES",
++    _QNX_AARCH64_PERLASM_ENTRIES = "PERLASM",
++)
+ load(
+     "//bazel/constants:linux_arm.bzl",
+     _LINUX_ARM_ASM_APP_EXTRA = "ASM_APP_EXTRA_SRCS",
+@@ -163,6 +174,17 @@ load(
+     _LINUX_X86_64_OPENSSL_DEFINES = "OPENSSL_DEFINES",
+     _LINUX_X86_64_PERLASM_ENTRIES = "PERLASM",
+ )
++load(
++    "//bazel/constants:qnx_x86_64.bzl",
++    _QNX_X86_64_ASM_APP_EXTRA = "ASM_APP_EXTRA_SRCS",
++    _QNX_X86_64_ASM_CRYPTO_EXTRA = "ASM_CRYPTO_EXTRA_SRCS",
++    _QNX_X86_64_ASM_SSL_EXTRA = "ASM_SSL_EXTRA_SRCS",
++    _QNX_X86_64_LIBCRYPTO_DEFINES = "LIBCRYPTO_DEFINES",
++    _QNX_X86_64_LIBSSL_DEFINES = "LIBSSL_DEFINES",
++    _QNX_X86_64_OPENSSL_APP_DEFINES = "OPENSSL_APP_DEFINES",
++    _QNX_X86_64_OPENSSL_DEFINES = "OPENSSL_DEFINES",
++    _QNX_X86_64_PERLASM_ENTRIES = "PERLASM",
++)
+ load(
+     "//bazel/constants:no_asm.bzl",
+     "NO_ASM_APP_EXTRA_SRCS",
+@@ -268,11 +290,13 @@ perl_library(
+         "//configs:freebsd_x86_64": ["configdata/freebsd_x86_64/configdata.pm"],
+         "//configs:ios_arm64": ["configdata/ios_arm64/configdata.pm"],
+         "//configs:linux_aarch64": ["configdata/linux_aarch64/configdata.pm"],
++        "//configs:qnx_aarch64": ["configdata/qnx_aarch64/configdata.pm"],
+         "//configs:linux_arm": ["configdata/linux_arm/configdata.pm"],
+         "//configs:linux_ppc64le": ["configdata/linux_ppc64le/configdata.pm"],
+         "//configs:linux_riscv64": ["configdata/linux_riscv64/configdata.pm"],
+         "//configs:linux_s390x": ["configdata/linux_s390x/configdata.pm"],
+         "//configs:linux_x86_64": ["configdata/linux_x86_64/configdata.pm"],
++        "//configs:qnx_x86_64": ["configdata/qnx_x86_64/configdata.pm"],
+         "//configs:windows_arm64": ["configdata/windows_arm64/configdata.pm"],
+         "//configs:windows_x64": ["configdata/windows_x64/configdata.pm"],
+         "//conditions:default": ["configdata/no_asm/configdata.pm"],
+@@ -287,11 +311,13 @@ perl_library(
+         "//configs:freebsd_x86_64": ["configdata/freebsd_x86_64"],
+         "//configs:ios_arm64": ["configdata/ios_arm64"],
+         "//configs:linux_aarch64": ["configdata/linux_aarch64"],
++        "//configs:qnx_aarch64": ["configdata/qnx_aarch64"],
+         "//configs:linux_arm": ["configdata/linux_arm"],
+         "//configs:linux_ppc64le": ["configdata/linux_ppc64le"],
+         "//configs:linux_riscv64": ["configdata/linux_riscv64"],
+         "//configs:linux_s390x": ["configdata/linux_s390x"],
+         "//configs:linux_x86_64": ["configdata/linux_x86_64"],
++        "//configs:qnx_x86_64": ["configdata/qnx_x86_64"],
+         "//configs:windows_arm64": ["configdata/windows_arm64"],
+         "//configs:windows_x64": ["configdata/windows_x64"],
+         "//conditions:default": ["configdata/no_asm"],
+@@ -390,11 +416,13 @@ _PERLASM = {
+         _FREEBSD_X86_64_PERLASM_ENTRIES,
+         _IOS_ARM64_PERLASM_ENTRIES,
+         _LINUX_AARCH64_PERLASM_ENTRIES,
++        _QNX_AARCH64_PERLASM_ENTRIES,
+         _LINUX_ARM_PERLASM_ENTRIES,
+         _LINUX_PPC64LE_PERLASM_ENTRIES,
+         _LINUX_RISCV64_PERLASM_ENTRIES,
+         _LINUX_S390X_PERLASM_ENTRIES,
+         _LINUX_X86_64_PERLASM_ENTRIES,
++        _QNX_X86_64_PERLASM_ENTRIES,
+         _WINDOWS_ARM64_PERLASM_ENTRIES,
+         _WINDOWS_X64_PERLASM_ENTRIES,
+     ]
+@@ -426,11 +454,13 @@ openssl_perlasm(
+         "//configs:freebsd_x86_64": "elf",
+         "//configs:ios_arm64": "ios64",
+         "//configs:linux_aarch64": "linux64",
++        "//configs:qnx_aarch64": "linux64",
+         "//configs:linux_arm": "linux32",
+         "//configs:linux_ppc64le": "linux64le",
+         "//configs:linux_riscv64": "linux64",
+         "//configs:linux_s390x": "64",
+         "//configs:linux_x86_64": "elf",
++        "//configs:qnx_x86_64": "elf",
+         "//configs:windows_arm64_clang": "linux64",
+         "//configs:windows_arm64_clang_cl": "win64",
+         "//configs:windows_arm64_mingw": "linux64",
+@@ -451,11 +481,13 @@ openssl_perlasm(
+         "//configs:freebsd_x86_64": openssl_perlasm_tools(_FREEBSD_X86_64_PERLASM_ENTRIES),
+         "//configs:ios_arm64": openssl_perlasm_tools(_IOS_ARM64_PERLASM_ENTRIES),
+         "//configs:linux_aarch64": openssl_perlasm_tools(_LINUX_AARCH64_PERLASM_ENTRIES),
++        "//configs:qnx_aarch64": openssl_perlasm_tools(_QNX_AARCH64_PERLASM_ENTRIES),
+         "//configs:linux_arm": openssl_perlasm_tools(_LINUX_ARM_PERLASM_ENTRIES),
+         "//configs:linux_ppc64le": openssl_perlasm_tools(_LINUX_PPC64LE_PERLASM_ENTRIES),
+         "//configs:linux_riscv64": openssl_perlasm_tools(_LINUX_RISCV64_PERLASM_ENTRIES),
+         "//configs:linux_s390x": openssl_perlasm_tools(_LINUX_S390X_PERLASM_ENTRIES),
+         "//configs:linux_x86_64": openssl_perlasm_tools(_LINUX_X86_64_PERLASM_ENTRIES),
++        "//configs:qnx_x86_64": openssl_perlasm_tools(_QNX_X86_64_PERLASM_ENTRIES),
+         "//configs:windows_arm64": openssl_perlasm_tools(_WINDOWS_ARM64_PERLASM_ENTRIES),
+         "//configs:windows_x64": openssl_perlasm_tools(_WINDOWS_X64_PERLASM_ENTRIES),
+         "//conditions:default": {},
+@@ -513,6 +545,7 @@ COMMON_OPENSSL_COPTS = [
+     "//configs:android_arm64": ["-mno-outline-atomics"],
+     "//configs:freebsd_aarch64": ["-mno-outline-atomics"],
+     "//configs:linux_aarch64": ["-mno-outline-atomics"],
++    "//configs:qnx_aarch64": ["-mno-outline-atomics"],
+     "//conditions:default": [],
+ }) + select({
+     "//configs:windows_clang_cl": _MSVC_WARNING_COPTS,
+@@ -646,11 +679,13 @@ cc_library(
+         "//configs:_asm_freebsd_x86_64": _FREEBSD_X86_64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _FREEBSD_X86_64_PERLASM_ENTRIES else []),
+         "//configs:_asm_ios_arm64": _IOS_ARM64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _IOS_ARM64_PERLASM_ENTRIES else []),
+         "//configs:_asm_linux_aarch64": _LINUX_AARCH64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_AARCH64_PERLASM_ENTRIES else []),
++        "//configs:_asm_qnx_aarch64": _QNX_AARCH64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _QNX_AARCH64_PERLASM_ENTRIES else []),
+         "//configs:_asm_linux_arm": _LINUX_ARM_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_ARM_PERLASM_ENTRIES else []),
+         "//configs:_asm_linux_ppc64le": _LINUX_PPC64LE_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_PPC64LE_PERLASM_ENTRIES else []),
+         "//configs:_asm_linux_riscv64": _LINUX_RISCV64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_RISCV64_PERLASM_ENTRIES else []),
+         "//configs:_asm_linux_s390x": _LINUX_S390X_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_S390X_PERLASM_ENTRIES else []),
+         "//configs:_asm_linux_x86_64": _LINUX_X86_64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_asm_qnx_x86_64": _QNX_X86_64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _QNX_X86_64_PERLASM_ENTRIES else []),
+         "//configs:_asm_windows_arm64": _WINDOWS_ARM64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _WINDOWS_ARM64_PERLASM_ENTRIES else []),
+         "//configs:_asm_windows_x64": _WINDOWS_X64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _WINDOWS_X64_PERLASM_ENTRIES else []),
+         # No-asm escape hatch (mutually exclusive with _asm_*/_pregen_asm_*)
+@@ -667,11 +702,13 @@ cc_library(
+         "//configs:_pregen_asm_freebsd_x86_64": _FREEBSD_X86_64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_elf"] if _FREEBSD_X86_64_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_ios_arm64": _IOS_ARM64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_ios64"] if _IOS_ARM64_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_linux_aarch64": _LINUX_AARCH64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux64"] if _LINUX_AARCH64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_qnx_aarch64": _QNX_AARCH64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux64"] if _QNX_AARCH64_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_linux_arm": _LINUX_ARM_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux32"] if _LINUX_ARM_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_linux_ppc64le": _LINUX_PPC64LE_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux64le"] if _LINUX_PPC64LE_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_linux_riscv64": _LINUX_RISCV64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_riscv64"] if _LINUX_RISCV64_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_linux_s390x": _LINUX_S390X_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_s390x"] if _LINUX_S390X_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_linux_x86_64": _LINUX_X86_64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_elf"] if _LINUX_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_qnx_x86_64": _QNX_X86_64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_elf"] if _QNX_X86_64_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_windows_arm64": _WINDOWS_ARM64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_win64"] if _WINDOWS_ARM64_PERLASM_ENTRIES else []),
+         "//configs:_pregen_asm_windows_x64": _WINDOWS_X64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_masm"] if _WINDOWS_X64_PERLASM_ENTRIES else []),
+         # Unknown platforms
+@@ -693,11 +730,13 @@ cc_library(
+         "//configs:_asm_freebsd_x86_64": _FREEBSD_X86_64_OPENSSL_DEFINES + _FREEBSD_X86_64_LIBCRYPTO_DEFINES,
+         "//configs:_asm_ios_arm64": _IOS_ARM64_OPENSSL_DEFINES + _IOS_ARM64_LIBCRYPTO_DEFINES,
+         "//configs:_asm_linux_aarch64": _LINUX_AARCH64_OPENSSL_DEFINES + _LINUX_AARCH64_LIBCRYPTO_DEFINES,
++        "//configs:_asm_qnx_aarch64": _QNX_AARCH64_OPENSSL_DEFINES + _QNX_AARCH64_LIBCRYPTO_DEFINES,
+         "//configs:_asm_linux_arm": _LINUX_ARM_OPENSSL_DEFINES + _LINUX_ARM_LIBCRYPTO_DEFINES,
+         "//configs:_asm_linux_ppc64le": _LINUX_PPC64LE_OPENSSL_DEFINES + _LINUX_PPC64LE_LIBCRYPTO_DEFINES,
+         "//configs:_asm_linux_riscv64": _LINUX_RISCV64_OPENSSL_DEFINES + _LINUX_RISCV64_LIBCRYPTO_DEFINES,
+         "//configs:_asm_linux_s390x": _LINUX_S390X_OPENSSL_DEFINES + _LINUX_S390X_LIBCRYPTO_DEFINES,
+         "//configs:_asm_linux_x86_64": _LINUX_X86_64_OPENSSL_DEFINES + _LINUX_X86_64_LIBCRYPTO_DEFINES,
++        "//configs:_asm_qnx_x86_64": _QNX_X86_64_OPENSSL_DEFINES + _QNX_X86_64_LIBCRYPTO_DEFINES,
+         "//configs:_asm_windows_arm64": _WINDOWS_ARM64_OPENSSL_DEFINES + _WINDOWS_ARM64_LIBCRYPTO_DEFINES,
+         "//configs:_asm_windows_x64": _WINDOWS_X64_OPENSSL_DEFINES + _WINDOWS_X64_LIBCRYPTO_DEFINES,
+         "//configs:_no_asm_fallback": NO_ASM_DEFINES,
+@@ -709,6 +748,7 @@ cc_library(
+         "//conditions:default": [],
+     }),
+     linkopts = select({
++        "@platforms//os:qnx": [],
+         "@platforms//os:linux": [
+             "-ldl",
+             "-pthread",
+@@ -745,11 +785,13 @@ cc_library(
+         "//configs:_asm_freebsd_x86_64": _FREEBSD_X86_64_ASM_SSL_EXTRA,
+         "//configs:_asm_ios_arm64": _IOS_ARM64_ASM_SSL_EXTRA,
+         "//configs:_asm_linux_aarch64": _LINUX_AARCH64_ASM_SSL_EXTRA,
++        "//configs:_asm_qnx_aarch64": _QNX_AARCH64_ASM_SSL_EXTRA,
+         "//configs:_asm_linux_arm": _LINUX_ARM_ASM_SSL_EXTRA,
+         "//configs:_asm_linux_ppc64le": _LINUX_PPC64LE_ASM_SSL_EXTRA,
+         "//configs:_asm_linux_riscv64": _LINUX_RISCV64_ASM_SSL_EXTRA,
+         "//configs:_asm_linux_s390x": _LINUX_S390X_ASM_SSL_EXTRA,
+         "//configs:_asm_linux_x86_64": _LINUX_X86_64_ASM_SSL_EXTRA,
++        "//configs:_asm_qnx_x86_64": _QNX_X86_64_ASM_SSL_EXTRA,
+         "//configs:_asm_windows_arm64": _WINDOWS_ARM64_ASM_SSL_EXTRA,
+         "//configs:_asm_windows_x64": _WINDOWS_X64_ASM_SSL_EXTRA,
+         "//configs:_no_asm_fallback": NO_ASM_SSL_EXTRA_SRCS,
+@@ -765,11 +807,13 @@ cc_library(
+         "//configs:_asm_freebsd_x86_64": _FREEBSD_X86_64_OPENSSL_DEFINES + _FREEBSD_X86_64_LIBSSL_DEFINES,
+         "//configs:_asm_ios_arm64": _IOS_ARM64_OPENSSL_DEFINES + _IOS_ARM64_LIBSSL_DEFINES,
+         "//configs:_asm_linux_aarch64": _LINUX_AARCH64_OPENSSL_DEFINES + _LINUX_AARCH64_LIBSSL_DEFINES,
++        "//configs:_asm_qnx_aarch64": _QNX_AARCH64_OPENSSL_DEFINES + _QNX_AARCH64_LIBSSL_DEFINES,
+         "//configs:_asm_linux_arm": _LINUX_ARM_OPENSSL_DEFINES + _LINUX_ARM_LIBSSL_DEFINES,
+         "//configs:_asm_linux_ppc64le": _LINUX_PPC64LE_OPENSSL_DEFINES + _LINUX_PPC64LE_LIBSSL_DEFINES,
+         "//configs:_asm_linux_riscv64": _LINUX_RISCV64_OPENSSL_DEFINES + _LINUX_RISCV64_LIBSSL_DEFINES,
+         "//configs:_asm_linux_s390x": _LINUX_S390X_OPENSSL_DEFINES + _LINUX_S390X_LIBSSL_DEFINES,
+         "//configs:_asm_linux_x86_64": _LINUX_X86_64_OPENSSL_DEFINES + _LINUX_X86_64_LIBSSL_DEFINES,
++        "//configs:_asm_qnx_x86_64": _QNX_X86_64_OPENSSL_DEFINES + _QNX_X86_64_LIBSSL_DEFINES,
+         "//configs:_asm_windows_arm64": _WINDOWS_ARM64_OPENSSL_DEFINES + _WINDOWS_ARM64_LIBSSL_DEFINES,
+         "//configs:_asm_windows_x64": _WINDOWS_X64_OPENSSL_DEFINES + _WINDOWS_X64_LIBSSL_DEFINES,
+         "//configs:_no_asm_fallback": NO_ASM_DEFINES,
+@@ -803,11 +847,13 @@ cc_binary(
+         "//configs:_asm_freebsd_x86_64": _FREEBSD_X86_64_ASM_APP_EXTRA,
+         "//configs:_asm_ios_arm64": _IOS_ARM64_ASM_APP_EXTRA,
+         "//configs:_asm_linux_aarch64": _LINUX_AARCH64_ASM_APP_EXTRA,
++        "//configs:_asm_qnx_aarch64": _QNX_AARCH64_ASM_APP_EXTRA,
+         "//configs:_asm_linux_arm": _LINUX_ARM_ASM_APP_EXTRA,
+         "//configs:_asm_linux_ppc64le": _LINUX_PPC64LE_ASM_APP_EXTRA,
+         "//configs:_asm_linux_riscv64": _LINUX_RISCV64_ASM_APP_EXTRA,
+         "//configs:_asm_linux_s390x": _LINUX_S390X_ASM_APP_EXTRA,
+         "//configs:_asm_linux_x86_64": _LINUX_X86_64_ASM_APP_EXTRA,
++        "//configs:_asm_qnx_x86_64": _QNX_X86_64_ASM_APP_EXTRA,
+         "//configs:_asm_windows_arm64": _WINDOWS_ARM64_ASM_APP_EXTRA,
+         "//configs:_asm_windows_x64": _WINDOWS_X64_ASM_APP_EXTRA,
+         "//configs:_no_asm_fallback": NO_ASM_APP_EXTRA_SRCS,
+@@ -828,11 +874,13 @@ cc_binary(
+         "//configs:_asm_freebsd_x86_64": _FREEBSD_X86_64_OPENSSL_APP_DEFINES,
+         "//configs:_asm_ios_arm64": _IOS_ARM64_OPENSSL_APP_DEFINES,
+         "//configs:_asm_linux_aarch64": _LINUX_AARCH64_OPENSSL_APP_DEFINES,
++        "//configs:_asm_qnx_aarch64": _QNX_AARCH64_OPENSSL_APP_DEFINES,
+         "//configs:_asm_linux_arm": _LINUX_ARM_OPENSSL_APP_DEFINES,
+         "//configs:_asm_linux_ppc64le": _LINUX_PPC64LE_OPENSSL_APP_DEFINES,
+         "//configs:_asm_linux_riscv64": _LINUX_RISCV64_OPENSSL_APP_DEFINES,
+         "//configs:_asm_linux_s390x": _LINUX_S390X_OPENSSL_APP_DEFINES,
+         "//configs:_asm_linux_x86_64": _LINUX_X86_64_OPENSSL_APP_DEFINES,
++        "//configs:_asm_qnx_x86_64": _QNX_X86_64_OPENSSL_APP_DEFINES,
+         "//configs:_asm_windows_arm64": _WINDOWS_ARM64_OPENSSL_APP_DEFINES,
+         "//configs:_asm_windows_x64": _WINDOWS_X64_OPENSSL_APP_DEFINES,
+         "//configs:_no_asm_fallback": [],
+diff --git a/overlay/bazel/pregen.bzl b/overlay/bazel/pregen.bzl
+index 3ed6442..70c6e02 100644
+--- a/overlay/bazel/pregen.bzl
++++ b/overlay/bazel/pregen.bzl
+@@ -16,6 +16,8 @@ _PREGEN_PLATFORMS = [
+     "linux_riscv64",
+     "linux_s390x",
+     "linux_x86_64",
++    "qnx_aarch64",
++    "qnx_x86_64",
+     "windows_arm64",
+     "windows_x64",
+ ]
+diff --git a/overlay/configs/BUILD.bazel b/overlay/configs/BUILD.bazel
+index d477f40..0a06509 100644
+--- a/overlay/configs/BUILD.bazel
++++ b/overlay/configs/BUILD.bazel
+@@ -32,6 +32,15 @@ config_setting(
+     visibility = ["//visibility:public"],
+ )
+ 
++config_setting(
++    name = "qnx_aarch64",
++    constraint_values = [
++        "@platforms//os:qnx",
++        "@platforms//cpu:aarch64",
++    ],
++    visibility = ["//visibility:public"],
++)
++
+ config_setting(
+     name = "linux_x86_64",
+     constraint_values = [
+@@ -41,6 +50,15 @@ config_setting(
+     visibility = ["//visibility:public"],
+ )
+ 
++config_setting(
++    name = "qnx_x86_64",
++    constraint_values = [
++        "@platforms//os:qnx",
++        "@platforms//cpu:x86_64",
++    ],
++    visibility = ["//visibility:public"],
++)
++
+ config_setting(
+     name = "windows_arm64",
+     constraint_values = [

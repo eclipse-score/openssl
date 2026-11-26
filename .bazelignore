@@ -1,0 +1,2 @@
+# Generated OpenSSL overlay; consumed via openssl_repository.bzl, not as packages of this repo.
+third_party/openssl/gen_overlay

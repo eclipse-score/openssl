@@ -1,0 +1,32 @@
+# Generated code. DO NOT EDIT.
+
+ASM_CRYPTO_EXTRA_SRCS = [
+    "engines/e_devcrypto.c",
+]
+
+ASM_SSL_EXTRA_SRCS = []
+
+ASM_APP_EXTRA_SRCS = []
+
+PERLASM = {}
+
+LIBCRYPTO_DEFINES = []
+
+LIBSSL_DEFINES = []
+
+OPENSSL_APP_DEFINES = [
+    "-DNDEBUG",
+    "-D_REENTRANT",
+    "-D_THREAD_SAFE",
+]
+
+OPENSSL_DEFINES = [
+    "-DL_ENDIAN",
+    "-DNDEBUG",
+    "-DOPENSSL_BUILDING_OPENSSL",
+    "-DOPENSSL_NO_KTLS",
+    "-DOPENSSL_PIC",
+    "-DUSE_TIMEGM",
+    "-D_REENTRANT",
+    "-D_THREAD_SAFE",
+]

@@ -1,39 +1,102 @@
 module(name = "score_openssl")
 
-# Standard Bazel dependencies required to compile C++ via configure/make
+# ===============================================================================
+# Configuration: OpenSSL release shared by all build paths
+# ===============================================================================
+
+_OPENSSL_VERSION = "3.6.1"
+
+_OPENSSL_SHA256 = "b1bfedcd5b289ff22aee87c9d600f515767ebf45f77168cb6d64f231f518a82e"
+
+_OPENSSL_URL = "https://www.openssl.org/source/openssl-{}.tar.gz".format(_OPENSSL_VERSION)
+
 bazel_dep(name = "rules_cc", version = "0.2.26")
-bazel_dep(name = "rules_foreign_cc", version = "0.16.0")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "score_bazel_platforms", version = "1.3.0")
 
-bazel_dep(
-    name = "score_bazel_platforms",
-    version = "1.3.0",
-)
-# Central C++ toolchains required for cross-compiling to QNX8 target environments
-bazel_dep(
-    name = "score_bazel_cpp_toolchains",
-    version = "1.0.5",
-    dev_dependency = True,
-)
-
-# HTTP archive rule for downloading OpenSSL source code
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# ===============================================================================
+# rules_foreign_cc build (configure_make, current default of //:openssl_impl)
+# ===============================================================================
+
+bazel_dep(name = "rules_foreign_cc", version = "0.16.0")
 
 http_archive(
     name = "openssl_source",
     build_file_content = "filegroup(name = 'all', srcs = glob(['**']), visibility = ['//visibility:public'])",
     patch_args = ["-p1"],
     patches = ["//patches:openssl_qnx_target.patch"],
-    sha256 = "b1bfedcd5b289ff22aee87c9d600f515767ebf45f77168cb6d64f231f518a82e",
-    strip_prefix = "openssl-3.6.1",
-    urls = ["https://www.openssl.org/source/openssl-3.6.1.tar.gz"],
+    sha256 = _OPENSSL_SHA256,
+    strip_prefix = "openssl-" + _OPENSSL_VERSION,
+    urls = [_OPENSSL_URL],
 )
 
 # Use preinstalled host tools to prevent bootstrapping pkgconfig under strict C11 flags
 register_toolchains(
     "@rules_foreign_cc//toolchains:preinstalled_pkgconfig_toolchain",
     "@rules_foreign_cc//toolchains:preinstalled_m4_toolchain",
+)
+
+# ===============================================================================
+# Generator based build (native cc_library, see third_party/openssl/README.md)
+# ===============================================================================
+
+# Generator inputs, only needed for: bazel run //third_party/openssl/generator:generate
+bazel_dep(name = "rules_shell", version = "0.4.1", dev_dependency = True)
+
+http_archive(
+    name = "openssl_release",
+    build_file_content = "exports_files(['VERSION.dat'])",
+    dev_dependency = True,
+    sha256 = _OPENSSL_SHA256,
+    strip_prefix = "openssl-" + _OPENSSL_VERSION,
+    urls = [_OPENSSL_URL],
+)
+
+http_archive(
+    name = "openssl_generator",
+    build_file_content = "exports_files(['README.md'])",
+    dev_dependency = True,
+    patch_args = ["-p1"],
+    patches = [
+        "//third_party/openssl/generator:patches/0001-configurable-options-and-no-asm-overlay.patch",
+        "//third_party/openssl/generator:patches/0002-qnx-targets.patch",
+    ],
+    sha256 = "35782da313e1f714452c0335a8398e505130084eaa8daa20852a4e1a47c028a3",
+    strip_prefix = "bazel-openssl-cc-ccbfb50c6193abf5ec96efed4039b00eca1ff761",
+    urls = ["https://github.com/raccoons-build/bazel-openssl-cc/archive/ccbfb50c6193abf5ec96efed4039b00eca1ff761.tar.gz"],
+)
+
+# Build of the generated overlay. The repository names are fixed because the
+# generated overlay refers to @openssl and @openssl_pregen.
+bazel_dep(name = "package_metadata", version = "0.0.13")
+bazel_dep(name = "rules_perl", version = "2.0.0")
+
+openssl_repository = use_repo_rule("//:openssl_repository.bzl", "openssl_repository")
+
+openssl_repository(
+    name = "openssl",
+    overlay = "third_party/openssl/gen_overlay/overlay",
+    sha256 = _OPENSSL_SHA256,
+    strip_prefix = "openssl-" + _OPENSSL_VERSION,
+    urls = [_OPENSSL_URL],
+)
+
+openssl_repository(
+    name = "openssl_pregen",
+    overlay = "third_party/openssl/gen_overlay/pregen",
+)
+
+# ===============================================================================
+# C++ toolchains (only for this repository's own builds and CI)
+# ===============================================================================
+
+bazel_dep(
+    name = "score_bazel_cpp_toolchains",
+    version = "1.0.5",
+    dev_dependency = True,
 )
 
 gcc = use_extension("@score_bazel_cpp_toolchains//extensions:gcc.bzl", "gcc", dev_dependency = True)
@@ -74,6 +137,10 @@ use_repo(
     "score_qcc_aarch64_toolchain",
     "score_qcc_x86_64_toolchain",
 )
+
+# ===============================================================================
+# Development environment
+# ===============================================================================
 
 bazel_dep(
     name = "score_devcontainer",

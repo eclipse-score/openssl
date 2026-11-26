@@ -106,7 +106,7 @@ bazel build //...
 bazel build --//:use_dynamic_openssl=True //...
 ```
 
-* **`:openssl_impl` (Master Override Point)**: Root `label_flag` allowing top-level integrating workspaces (OEMs) to globally replace the OpenSSL compilation target (e.g. pointing to a prebuilt or hardware-certified library like `@openssl//:ssl`). Defaults to `:openssl_make`:
+* **`:openssl_impl` (Master Override Point)**: Root `label_flag` allowing top-level integrating workspaces (OEMs) to globally replace the OpenSSL compilation target (e.g. pointing to a prebuilt or hardware-certified library). Defaults to the generated `@openssl//:ssl` target:
 
 ```bash
 # Override example (e.g. in root .bazelrc):
