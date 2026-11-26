@@ -1,0 +1,198 @@
+diff --git a/generator/extract_srcs.pl b/generator/extract_srcs.pl
+index c65d0fe..a34fc4d 100644
+--- a/generator/extract_srcs.pl
++++ b/generator/extract_srcs.pl
+@@ -243,6 +243,10 @@ if (exists $config{lib_defines}) {
+ if (exists $config{openssl_other_defines}) {
+     push @defines, @{$config{openssl_other_defines}}
+ }
++# User -D options given to Configure (upstream's CPPDEFINES).
++if (exists $config{CPPDEFINES}) {
++    push @defines, @{$config{CPPDEFINES}}
++}
+ # Everything upstream's LIB_CPPFLAGS carries, e.g. L_ENDIAN / B_ENDIAN.
+ push @defines, cppflag_defines($target{cppflags}, $target{lib_cppflags},
+                                $config{cppflags}, $config{lib_cppflags});
+diff --git a/generator/generate_constants.py b/generator/generate_constants.py
+index fa7f449..669936e 100644
+--- a/generator/generate_constants.py
++++ b/generator/generate_constants.py
+@@ -217,6 +217,17 @@ class PlatformData(NamedTuple):
+         return set(self.openssl_app_srcs)
+ 
+ 
++# Additional Configure options (--configure_options_file): for every platform, and per
++# @platforms//os name (e.g. "linux") of the platform.
++EXTRA_CONFIGURE_OPTIONS: list[str] = []
++EXTRA_CONFIGURE_OPTIONS_PER_OS: dict[str, list[str]] = {}
++
++
++def _platform_os(platform: str) -> str | None:
++    constraints = PLATFORM_CONSTRAINTS.get(get_simple_config_name(platform))
++    return constraints[0].rsplit(":", 1)[1] if constraints else None
++
++
+ def run_configure(openssl_dir: Path, platform: str, perl_path: str = "perl") -> None:
+     """Run OpenSSL's Configure for a given target platform.
+ 
+@@ -242,6 +253,8 @@ def run_configure(openssl_dir: Path, platform: str, perl_path: str = "perl") ->
+     ]
+     if platform == NO_ASM_TARGET:
+         configure_cmd.append("no-asm")
++    configure_cmd += EXTRA_CONFIGURE_OPTIONS
++    configure_cmd += EXTRA_CONFIGURE_OPTIONS_PER_OS.get(_platform_os(platform) or "", [])
+ 
+     env = os.environ.copy()
+     if platform in WINDOWS_PLATFORMS:
+@@ -1589,6 +1602,7 @@ def main(
+             shutil.rmtree(generated_dst)
+         shutil.move(str(generated_src), str(generated_dst))
+     srcs.copy_tree(PREGEN_DIR, pregen)
++    _render_version(pregen / "BUILD.bazel", version)
+     (pregen / "WORKSPACE.bazel").write_text('workspace(name = "openssl_pregen")\n')
+     # The archive only holds files derived from OpenSSL sources; ship its license with them.
+     shutil.copyfile(openssl_dir / "LICENSE.txt", pregen / "LICENSE.txt")
+@@ -1598,6 +1612,7 @@ def main(
+     # overlay shipped to BCR, so it is copied as-is (with version overrides),
+     # except MODULE.bazel, which is rendered with the module version below.
+     srcs.copy_tree(OVERLAY_DIR, out, exclude=frozenset({"MODULE.bazel"}))
++    _render_version(out / "BUILD.bazel", version)
+ 
+     if buildifier_path:
+         print("=== Formatting with buildifier ===")
+@@ -1626,6 +1641,11 @@ def main(
+     print(f"Overlay written to: {out}")
+ 
+ 
++def _render_version(build_file: Path, version: OpenSSLVersion) -> None:
++    """Fill in the OpenSSL version so package metadata does not depend on the module context."""
++    build_file.write_text(build_file.read_text().replace("{{OPENSSL_VERSION}}", str(version)))
++
++
+ def render_module_bazel(srcs: OverlaySources, tag: str) -> str:
+     """Render overlay/MODULE.bazel for a module version.
+ 
+@@ -1762,8 +1782,20 @@ if __name__ == "__main__":
+         "Only runs perlasm pre-generation for the specified flavors, "
+         "then exits. Used by platform-native CI runners.",
+     )
++    parser.add_argument(
++        "--configure_options_file",
++        default=None,
++        help="JSON file with a 'configure_options' list passed to Configure for every platform",
++    )
+     args = parser.parse_args()
+     perl = _resolve_perl(args.perl)
++    if args.configure_options_file:
++        options = json.loads(Path(args.configure_options_file).read_text())
++        EXTRA_CONFIGURE_OPTIONS.extend(options["configure_options"])
++        EXTRA_CONFIGURE_OPTIONS_PER_OS.update(options.get("configure_options_per_os", {}))
++        print(f"Extra Configure options: {' '.join(EXTRA_CONFIGURE_OPTIONS)}")
++        for os_name, os_options in EXTRA_CONFIGURE_OPTIONS_PER_OS.items():
++            print(f"Extra Configure options for {os_name}: {' '.join(os_options)}")
+ 
+     if args.perlasm_only:
+         perlasm_only(
+diff --git a/overlay/BUILD.bazel b/overlay/BUILD.bazel
+index 6ce9c65..d992899 100644
+--- a/overlay/BUILD.bazel
++++ b/overlay/BUILD.bazel
+@@ -209,8 +209,8 @@ package_metadata(
+     name = "package_metadata",
+     attributes = [":license"],
+     purl = purl.bazel(
+-        module_name(),
+-        module_version(),
++        "openssl",
++        "{{OPENSSL_VERSION}}",
+     ),
+     visibility = ["//visibility:public"],
+ )
+@@ -638,42 +638,42 @@ cc_library(
+     name = "crypto",
+     srcs = COMMON_CRYPTO_SRCS + select({
+         # Perl perlasm fallback (all known platforms, noasm=False)
+-        "//configs:_asm_android_arm64": _ANDROID_ARM64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_android_x86_64": _ANDROID_X86_64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_darwin_arm64": _DARWIN_ARM64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_darwin_x86_64": _DARWIN_X86_64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_freebsd_aarch64": _FREEBSD_AARCH64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_freebsd_x86_64": _FREEBSD_X86_64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_ios_arm64": _IOS_ARM64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_linux_aarch64": _LINUX_AARCH64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_linux_arm": _LINUX_ARM_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_linux_ppc64le": _LINUX_PPC64LE_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_linux_riscv64": _LINUX_RISCV64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_linux_s390x": _LINUX_S390X_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_linux_x86_64": _LINUX_X86_64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_windows_arm64": _WINDOWS_ARM64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
+-        "//configs:_asm_windows_x64": _WINDOWS_X64_ASM_CRYPTO_EXTRA + [":perlasm_genfiles"],
++        "//configs:_asm_android_arm64": _ANDROID_ARM64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _ANDROID_ARM64_PERLASM_ENTRIES else []),
++        "//configs:_asm_android_x86_64": _ANDROID_X86_64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _ANDROID_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_asm_darwin_arm64": _DARWIN_ARM64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _DARWIN_ARM64_PERLASM_ENTRIES else []),
++        "//configs:_asm_darwin_x86_64": _DARWIN_X86_64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _DARWIN_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_asm_freebsd_aarch64": _FREEBSD_AARCH64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _FREEBSD_AARCH64_PERLASM_ENTRIES else []),
++        "//configs:_asm_freebsd_x86_64": _FREEBSD_X86_64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _FREEBSD_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_asm_ios_arm64": _IOS_ARM64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _IOS_ARM64_PERLASM_ENTRIES else []),
++        "//configs:_asm_linux_aarch64": _LINUX_AARCH64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_AARCH64_PERLASM_ENTRIES else []),
++        "//configs:_asm_linux_arm": _LINUX_ARM_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_ARM_PERLASM_ENTRIES else []),
++        "//configs:_asm_linux_ppc64le": _LINUX_PPC64LE_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_PPC64LE_PERLASM_ENTRIES else []),
++        "//configs:_asm_linux_riscv64": _LINUX_RISCV64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_RISCV64_PERLASM_ENTRIES else []),
++        "//configs:_asm_linux_s390x": _LINUX_S390X_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_S390X_PERLASM_ENTRIES else []),
++        "//configs:_asm_linux_x86_64": _LINUX_X86_64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _LINUX_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_asm_windows_arm64": _WINDOWS_ARM64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _WINDOWS_ARM64_PERLASM_ENTRIES else []),
++        "//configs:_asm_windows_x64": _WINDOWS_X64_ASM_CRYPTO_EXTRA + ([":perlasm_genfiles"] if _WINDOWS_X64_PERLASM_ENTRIES else []),
+         # No-asm escape hatch (mutually exclusive with _asm_*/_pregen_asm_*)
+         "//configs:_no_asm_fallback": NO_ASM_CRYPTO_EXTRA_SRCS,
+         # Pre-generated assembly (most specialized). Linux groups assume glibc
+         # and the Windows groups are MSVC flavoured; libc constraints could
+         # come from https://github.com/bazel-contrib/platforms_contrib/ in
+         # the future. mingw builds use --@openssl//:use-pregenerated=False.
+-        "//configs:_pregen_asm_android_arm64": _ANDROID_ARM64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_linux64"],
+-        "//configs:_pregen_asm_android_x86_64": _ANDROID_X86_64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_elf"],
+-        "//configs:_pregen_asm_darwin_arm64": _DARWIN_ARM64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_ios64"],
+-        "//configs:_pregen_asm_darwin_x86_64": _DARWIN_X86_64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_macosx"],
+-        "//configs:_pregen_asm_freebsd_aarch64": _FREEBSD_AARCH64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_linux64"],
+-        "//configs:_pregen_asm_freebsd_x86_64": _FREEBSD_X86_64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_elf"],
+-        "//configs:_pregen_asm_ios_arm64": _IOS_ARM64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_ios64"],
+-        "//configs:_pregen_asm_linux_aarch64": _LINUX_AARCH64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_linux64"],
+-        "//configs:_pregen_asm_linux_arm": _LINUX_ARM_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_linux32"],
+-        "//configs:_pregen_asm_linux_ppc64le": _LINUX_PPC64LE_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_linux64le"],
+-        "//configs:_pregen_asm_linux_riscv64": _LINUX_RISCV64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_riscv64"],
+-        "//configs:_pregen_asm_linux_s390x": _LINUX_S390X_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_s390x"],
+-        "//configs:_pregen_asm_linux_x86_64": _LINUX_X86_64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_elf"],
+-        "//configs:_pregen_asm_windows_arm64": _WINDOWS_ARM64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_win64"],
+-        "//configs:_pregen_asm_windows_x64": _WINDOWS_X64_ASM_CRYPTO_EXTRA + ["@openssl_pregen//:asm_masm"],
++        "//configs:_pregen_asm_android_arm64": _ANDROID_ARM64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux64"] if _ANDROID_ARM64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_android_x86_64": _ANDROID_X86_64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_elf"] if _ANDROID_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_darwin_arm64": _DARWIN_ARM64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_ios64"] if _DARWIN_ARM64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_darwin_x86_64": _DARWIN_X86_64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_macosx"] if _DARWIN_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_freebsd_aarch64": _FREEBSD_AARCH64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux64"] if _FREEBSD_AARCH64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_freebsd_x86_64": _FREEBSD_X86_64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_elf"] if _FREEBSD_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_ios_arm64": _IOS_ARM64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_ios64"] if _IOS_ARM64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_linux_aarch64": _LINUX_AARCH64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux64"] if _LINUX_AARCH64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_linux_arm": _LINUX_ARM_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux32"] if _LINUX_ARM_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_linux_ppc64le": _LINUX_PPC64LE_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_linux64le"] if _LINUX_PPC64LE_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_linux_riscv64": _LINUX_RISCV64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_riscv64"] if _LINUX_RISCV64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_linux_s390x": _LINUX_S390X_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_s390x"] if _LINUX_S390X_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_linux_x86_64": _LINUX_X86_64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_elf"] if _LINUX_X86_64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_windows_arm64": _WINDOWS_ARM64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_win64"] if _WINDOWS_ARM64_PERLASM_ENTRIES else []),
++        "//configs:_pregen_asm_windows_x64": _WINDOWS_X64_ASM_CRYPTO_EXTRA + (["@openssl_pregen//:asm_masm"] if _WINDOWS_X64_PERLASM_ENTRIES else []),
+         # Unknown platforms
+         "//conditions:default": NO_ASM_CRYPTO_EXTRA_SRCS,
+     }) + select({
+diff --git a/pregen/BUILD.bazel b/pregen/BUILD.bazel
+index 5b329ce..b61cb0d 100644
+--- a/pregen/BUILD.bazel
++++ b/pregen/BUILD.bazel
+@@ -14,8 +14,8 @@ package_metadata(
+     name = "package_metadata",
+     attributes = [":license"],
+     purl = purl.bazel(
+-        module_name(),
+-        module_version(),
++        "openssl",
++        "{{OPENSSL_VERSION}}",
+     ),
+ )
+ 

@@ -31,18 +31,12 @@ _QNX_SDP_ENV_FIXUP = select({
 # https://github.com/openssl/openssl/blob/openssl-3.6.1/INSTALL.md
 configure_make(
     name = "openssl_make",
-    copts = [
-        "-Wno-error",
-        "-Wno-error=implicit-function-declaration",
-        "-D_GNU_SOURCE",
-    ],
-    features = ["-warnings_as_errors", "-strict_warnings", "-minimal_warnings"],
     args = ["-j$(nproc)"],
     configure_command = "Configure",  # OpenSSL uses Configure, not configure
     configure_in_place = False,  # Avoid path conflicts with QCC
     configure_options = select({
         "@score_bazel_platforms//settings:aarch64-qnx": ["qnx-aarch64"],  # Patched openssl main.conf
-        "@score_bazel_platforms//settings:x86_64-qnx": ["qnx-x86_64"],    # Patched openssl main.conf
+        "@score_bazel_platforms//settings:x86_64-qnx": ["qnx-x86_64"],  # Patched openssl main.conf
         "@score_bazel_platforms//settings:aarch64-linux": ["linux-aarch64"],
         "//conditions:default": [],
     }) + [
@@ -100,7 +94,6 @@ configure_make(
         "no-legacy",  # Disable legacy provider (only default provider used)
         "no-async",  # Disable async dispatch (unused)
         "-DUSE_TIMEGM",  # QNX doesn't provide the 'timezone' global variable
-
         "no-shared",  # Only build static archives (.a)
         "--prefix=$${INSTALLDIR}",
         "--openssldir=$${INSTALLDIR}",
@@ -113,7 +106,16 @@ configure_make(
     # resolves while the cwd is the execroot, but foreign_cc make runs from the build tmpdir.
     # Re-root them onto EXT_BUILD_ROOT for configure and make.
     configure_prefix = _QNX_SDP_ENV_FIXUP,
-    tool_prefix = _QNX_SDP_ENV_FIXUP,
+    copts = [
+        "-Wno-error",
+        "-Wno-error=implicit-function-declaration",
+        "-D_GNU_SOURCE",
+    ],
+    features = [
+        "-warnings_as_errors",
+        "-strict_warnings",
+        "-minimal_warnings",
+    ],
     lib_source = "@openssl_source//:all",
     out_include_dir = "include",
     out_lib_dir = "lib",
@@ -121,12 +123,12 @@ configure_make(
         "libcrypto.a",
         "libssl.a",
     ],
-
     tags = ["no-sandbox"],
     targets = [
         "build_libs",
         "install_dev",
     ],
+    tool_prefix = _QNX_SDP_ENV_FIXUP,
 )
 
 # -------------------------------------------------------------------------------
@@ -135,7 +137,7 @@ configure_make(
 # -------------------------------------------------------------------------------
 label_flag(
     name = "openssl_impl",
-    build_setting_default = ":openssl_make",
+    build_setting_default = "@openssl//:ssl",
     visibility = ["//visibility:public"],
 )
 
@@ -206,6 +208,6 @@ alias(
 # builds and external cc_library targets when openssl_impl is overridden.
 openssl_build_info(
     name = "openssl_build_info",
-    implementation = ":openssl_impl",
     visibility = ["//visibility:public"],
+    implementation = ":openssl_impl",
 )
